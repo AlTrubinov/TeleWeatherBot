@@ -1,65 +1,64 @@
-from flask import Flask
-from flask import request
-from flask import jsonify
 import requests
 import json
 import const
-from flask_sslify import SSLify
+import telebot
+from telebot import types
 
-app = Flask(__name__)
-sslify = SSLify(app)
-
-
-def write_json(data, filename='answer.json'):
-    with open(filename, 'w') as file:
-        json.dump(data, file, indent=2, ensure_ascii=False)
+bot = telebot.TeleBot(const.TOKEN, parse_mode=None)
 
 
-def send_message(chat_id, text='Nothing city'):
-    url = const.URL.format(TOKEN=const.TOKEN, method=const.send_method)
-    data = {
-        'chat_id': chat_id,
-        'text': text
-    }
-    response = requests.post(url, json=data)
-    return response.json()
+def parse_weather_data(types, data):
+    if types == 'weather1':
+        for elem in data['weather']:
+            weather_state = elem['main']
+        temp = data['main']['temp']
+        city = data['name']
+        msg = f'The weather in {city} is {temp}° degree. State is {weather_state}.'
+    elif types == 'weather24':
+        city = data['city']['name']
+        msg = f'The weather in {city} for 24 hours (GMT+7):\n'
+        for elem in data['list']:
+            date_time = elem['dt_txt']
+            temp = elem['main']['temp']
+            for weath_elem in elem['weather']:
+                weather_state = weath_elem['main']
+            msg += f'{date_time}: Temp is {temp}°.\nState is {weather_state}.\n\n'
 
-
-def parse_weather_data(data):
-    for elem in data['weather']:
-        weather_state = elem['main']
-    temp = round(data['main']['temp'], 2)
-    city = data['name']
-    msg = f'The weather in {city} is {temp}° degree. State is {weather_state}.'
     return msg
 
 
-def get_weather(location):
-    url = const.WEATER_URL.format(city=location, token=const.WEATHER_TOKEN)
+def get_weather(types, location):
+    url = const.WEATHER_URL[types].format(city=location, token=const.WEATHER_TOKEN)
     response = requests.get(url)
     if response.status_code != 200:
         return 'City not found. Try again or send another city.'
     data = json.loads(response.content)
-    return parse_weather_data(data)
+    return parse_weather_data(types, data)
 
 
-@app.route('/', methods=['POST', 'GET'])
-def index():
-    if request.method == 'POST':
-        response = request.get_json()
-        chat_id = response['message']['chat']['id']
-        message = response['message']['text']
-        if message in ['/start', '/help']:
-            help_text = "Hi, I'm weather bot, you can send me any city and I will tell you about the weather in it! " \
-                        "But if I do not know such a city, you will see the following message:"
-            send_message(chat_id=chat_id, text=help_text)
-
-        msg = get_weather(message)
-        send_message(chat_id=chat_id, text=msg)
-        write_json(response)
-        return jsonify(response)
-    return '<h1>Welcome from bot</h1>'
+@bot.message_handler(commands=['start', 'help', 'info'])
+def send_welcome(message):
+    bot.send_message(message.chat.id,
+                     "Hi, I'm weather bot, you can send me any city and I will tell you about the weather in it!")
 
 
-if __name__ == '__main__':
-    app.run()
+@bot.message_handler(content_types=['text'])
+def get_message(message):
+    city = message.text
+    weather_types = types.InlineKeyboardMarkup()
+    weather_btn1 = types.InlineKeyboardButton(text='Weather right now', callback_data=f'weather1 {city}')
+    weather_btn5 = types.InlineKeyboardButton(text='Weather for 24 hours', callback_data=f'weather24 {city}')
+    weather_types.add(weather_btn1, weather_btn5)
+    bot.send_message(message.chat.id, "Now choose what you need", reply_markup=weather_types)
+
+
+@bot.callback_query_handler(func=lambda m: True)
+def answer(call):
+    answer = str(call.data).split()
+    if answer[0] == 'weather1':
+        bot.send_message(call.message.chat.id, get_weather(answer[0], answer[1]))
+    elif answer[0] == 'weather24':
+        bot.send_message(call.message.chat.id, get_weather(answer[0], answer[1]))
+
+
+bot.polling(none_stop=True, interval=0)
